@@ -268,6 +268,201 @@ server.tool("get_slab_pricing", "Get current slab pricing for all products", {},
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 });
 
+// ── bulk operations ───────────────────────────────────────────────
+
+server.tool("bulk_update_orders", "Update status of multiple orders at once (e.g., ship all packed orders)", {
+  status_from: z.string().describe("Current status to filter by (e.g., 'packed')"),
+  status_to: z.string().describe("New status to set (e.g., 'shipped')"),
+  notes: z.string().optional(),
+}, async ({ status_from, status_to, notes }) => {
+  await ensureToken();
+  const orders = await api("GET", `/admin/orders?status=${status_from}&per_page=100`);
+  const items = orders.items || [];
+  if (items.length === 0) return { content: [{ type: "text", text: `No orders with status '${status_from}'` }] };
+
+  const results = [];
+  for (const o of items) {
+    try {
+      await api("PATCH", `/admin/orders/${o.id}/status`, { status: status_to, notes: notes || `Bulk update: ${status_from} → ${status_to}` });
+      results.push(`${o.order_number}: OK`);
+    } catch (e) { results.push(`${o.order_number}: FAILED — ${e.message}`); }
+  }
+  return { content: [{ type: "text", text: `Updated ${results.filter(r => r.includes('OK')).length}/${items.length} orders:\n${results.join('\n')}` }] };
+});
+
+// ── reports ───────────────────────────────────────────────────────
+
+server.tool("daily_summary", "Morning briefing — orders, revenue, pending dispatch, churn alerts, stock warnings in one call", {}, async () => {
+  await ensureToken();
+  const [dashboard, pending, active, churn, products] = await Promise.all([
+    api("GET", "/admin/dashboard/summary"),
+    api("GET", "/admin/delivery/pending").catch(() => []),
+    api("GET", "/admin/delivery").catch(() => []),
+    api("GET", "/admin/retention/churn-summary").catch(() => ({})),
+    api("GET", "/products/?per_page=50"),
+  ]);
+
+  const lowStock = (products.items || []).filter(p => p.stock_quantity <= p.low_stock_threshold);
+
+  const summary = {
+    revenue: { total: dashboard.total_revenue, this_month: dashboard.orders_this_month + " orders" },
+    orders: { today: dashboard.orders_today, this_week: dashboard.orders_this_week, pending: dashboard.pending_orders },
+    delivery: { pending_dispatch: Array.isArray(pending) ? pending.length : 0, in_transit: Array.isArray(active) ? active.length : 0 },
+    customers: { active: dashboard.active_customers, churn_risks: churn.reorder_gap_alerts || 0, volume_drops: churn.volume_drop_alerts || 0 },
+    stock_warnings: lowStock.map(p => ({ name: p.name, stock: p.stock_quantity, threshold: p.low_stock_threshold })),
+    tier_distribution: churn.tier_distribution || {},
+  };
+  return { content: [{ type: "text", text: JSON.stringify(summary, null, 2) }] };
+});
+
+server.tool("revenue_report", "Revenue breakdown by period — daily, weekly, or monthly totals", {
+  days: z.number().default(30).describe("Period in days"),
+}, async ({ days }) => {
+  await ensureToken();
+  const [chart, orders] = await Promise.all([
+    api("GET", `/admin/dashboard/sales-chart?days=${days}`),
+    api("GET", `/admin/orders?per_page=100`),
+  ]);
+
+  const allOrders = orders.items || [];
+  const paidOrders = allOrders.filter(o => o.payment_status === "paid");
+  const totalRevenue = paidOrders.reduce((s, o) => s + Number(o.total_amount), 0);
+  const avgOrderValue = paidOrders.length > 0 ? totalRevenue / paidOrders.length : 0;
+
+  // revenue by product
+  const byProduct = {};
+  for (const o of paidOrders) {
+    for (const item of (o.items || [])) {
+      const name = item.product_name;
+      byProduct[name] = (byProduct[name] || 0) + Number(item.total_price);
+    }
+  }
+
+  return { content: [{ type: "text", text: JSON.stringify({
+    period_days: days,
+    total_revenue: totalRevenue,
+    total_orders: paidOrders.length,
+    avg_order_value: Math.round(avgOrderValue),
+    revenue_by_product: byProduct,
+    daily_data: chart,
+  }, null, 2) }] };
+});
+
+server.tool("customer_report", "Customer insights — top customers, new vs returning, at-risk", {}, async () => {
+  await ensureToken();
+  const [customers, orders, churn] = await Promise.all([
+    api("GET", "/admin/customers?per_page=100"),
+    api("GET", "/admin/orders?per_page=200"),
+    api("GET", "/admin/retention/churn-summary").catch(() => ({})),
+  ]);
+
+  const custs = customers.items || [];
+  const allOrders = orders.items || [];
+
+  // orders per customer
+  const ordersByCustomer = {};
+  for (const o of allOrders) {
+    if (!o.user_id) continue;
+    if (!ordersByCustomer[o.user_id]) ordersByCustomer[o.user_id] = { count: 0, total: 0 };
+    ordersByCustomer[o.user_id].count++;
+    ordersByCustomer[o.user_id].total += Number(o.total_amount);
+  }
+
+  // top customers by revenue
+  const topCustomers = custs
+    .map(c => ({ name: c.full_name, phone: c.phone, type: c.customer_type, tier: c.tier, orders: ordersByCustomer[c.id]?.count || 0, revenue: ordersByCustomer[c.id]?.total || 0 }))
+    .sort((a, b) => b.revenue - a.revenue)
+    .slice(0, 10);
+
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString();
+  const newCustomers = custs.filter(c => c.created_at > thirtyDaysAgo).length;
+
+  return { content: [{ type: "text", text: JSON.stringify({
+    total_customers: custs.length,
+    new_last_30_days: newCustomers,
+    by_type: { retail: custs.filter(c => c.customer_type === "retail").length, wholesale: custs.filter(c => c.customer_type === "wholesale").length },
+    tier_distribution: churn.tier_distribution || {},
+    churn_risks: churn.reorder_gap_alerts || 0,
+    top_10_customers: topCustomers,
+  }, null, 2) }] };
+});
+
+server.tool("margin_calculator", "Calculate profit margin given buy and sell prices", {
+  buy_price_per_kg: z.number().describe("Purchase price per kg"),
+  sell_price_per_kg: z.number().describe("Selling price per kg"),
+  volume_kg: z.number().default(1).describe("Volume in kg"),
+  packaging_cost_per_kg: z.number().default(0).describe("Packaging cost per kg"),
+  delivery_cost_per_kg: z.number().default(0).describe("Delivery cost per kg"),
+}, async ({ buy_price_per_kg, sell_price_per_kg, volume_kg, packaging_cost_per_kg, delivery_cost_per_kg }) => {
+  const totalCost = (buy_price_per_kg + packaging_cost_per_kg + delivery_cost_per_kg) * volume_kg;
+  const revenue = sell_price_per_kg * volume_kg;
+  const profit = revenue - totalCost;
+  const marginPct = revenue > 0 ? (profit / revenue * 100) : 0;
+  const gst = revenue * 0.05;
+
+  return { content: [{ type: "text", text: JSON.stringify({
+    volume_kg,
+    buy_total: totalCost,
+    sell_total: revenue,
+    gst_5pct: Math.round(gst),
+    gross_profit: Math.round(profit),
+    margin_percent: Math.round(marginPct * 10) / 10,
+    profit_per_kg: Math.round(profit / volume_kg),
+  }, null, 2) }] };
+});
+
+server.tool("search_orders", "Search orders by customer name, phone, date range, or amount", {
+  query: z.string().optional().describe("Search by order number or customer"),
+  status: z.string().optional(),
+  days: z.number().default(30).describe("Look back N days"),
+}, async ({ query, status, days }) => {
+  await ensureToken();
+  let path = `/admin/orders?per_page=50`;
+  if (status) path += `&status=${status}`;
+  const data = await api("GET", path);
+  let items = data.items || [];
+
+  // client-side filter by query (name/phone/order number)
+  if (query) {
+    const q = query.toLowerCase();
+    items = items.filter(o =>
+      o.order_number?.toLowerCase().includes(q) ||
+      o.shipping_address?.full_name?.toLowerCase().includes(q) ||
+      o.shipping_address?.phone?.includes(q)
+    );
+  }
+
+  // filter by date range
+  const cutoff = new Date(Date.now() - days * 86400000).toISOString();
+  items = items.filter(o => o.created_at >= cutoff);
+
+  const summary = items.map(o => ({
+    order: o.order_number,
+    customer: o.shipping_address?.full_name || "—",
+    total: o.total_amount,
+    status: o.status,
+    payment: o.payment_status,
+    date: o.created_at?.slice(0, 10),
+  }));
+
+  return { content: [{ type: "text", text: JSON.stringify({ count: summary.length, orders: summary }, null, 2) }] };
+});
+
+server.tool("restock_alert", "Check which products are low on stock and need restocking", {}, async () => {
+  await ensureToken();
+  const data = await api("GET", "/products/?per_page=50");
+  const products = data.items || [];
+  const lowStock = products.filter(p => p.stock_quantity <= p.low_stock_threshold);
+  const outOfStock = products.filter(p => p.stock_quantity === 0);
+
+  return { content: [{ type: "text", text: JSON.stringify({
+    total_products: products.length,
+    out_of_stock: outOfStock.map(p => ({ name: p.name, sku: p.sku })),
+    low_stock: lowStock.map(p => ({ name: p.name, sku: p.sku, current: p.stock_quantity, threshold: p.low_stock_threshold })),
+    healthy: products.filter(p => p.stock_quantity > p.low_stock_threshold).map(p => ({ name: p.name, stock: p.stock_quantity })),
+  }, null, 2) }] };
+});
+
 // ── start ─────────────────────────────────────────────────────────
 
 const transport = new StdioServerTransport();
