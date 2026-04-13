@@ -11,11 +11,17 @@ async function api(method, path, body = null) {
   const opts = {
     method,
     headers: { "Content-Type": "application/json" },
+    redirect: "follow",
   };
   if (TOKEN) opts.headers["Authorization"] = `Bearer ${TOKEN}`;
   if (body) opts.body = JSON.stringify(body);
 
-  const res = await fetch(`${API_BASE}${path}`, opts);
+  // follow 307 redirects by re-requesting with auth
+  let res = await fetch(`${API_BASE}${path}`, opts);
+  if (res.status === 307) {
+    const location = res.headers.get("location");
+    if (location) res = await fetch(location, opts);
+  }
   const data = await res.json();
   if (!res.ok) throw new Error(data.detail || JSON.stringify(data));
   return data;
