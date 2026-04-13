@@ -274,6 +274,116 @@ server.tool("get_slab_pricing", "Get current slab pricing for all products", {},
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 });
 
+// ── smart stock + product management ─────────────────────────────
+
+server.tool("update_stock_by_name", "Update stock for a product by name (e.g., 'Rajalakshmi Gold - 250g')", {
+  product_name: z.string().describe("Product name or partial match like 'Gold 250g' or 'Royal 1kg'"),
+  quantity: z.number().describe("New stock quantity"),
+}, async ({ product_name, quantity }) => {
+  await ensureToken();
+  const products = await api("GET", "/products/?per_page=50");
+  const items = products.items || [];
+  const q = product_name.toLowerCase();
+  const match = items.find(p => p.name.toLowerCase().includes(q) || `${p.name} ${p.weight_display}`.toLowerCase().includes(q));
+  if (!match) return { content: [{ type: "text", text: `No product matching '${product_name}'. Available: ${items.map(p => p.name).join(', ')}` }] };
+  const data = await api("PATCH", `/admin/products/${match.id}/stock?quantity=${quantity}`);
+  return { content: [{ type: "text", text: `${match.name}: stock updated to ${data.stock_quantity}` }] };
+});
+
+server.tool("update_price_by_name", "Update price for a product by name", {
+  product_name: z.string().describe("Product name or partial match"),
+  retail_price: z.number().describe("New retail price"),
+}, async ({ product_name, retail_price }) => {
+  await ensureToken();
+  const products = await api("GET", "/products/?per_page=50");
+  const items = products.items || [];
+  const q = product_name.toLowerCase();
+  const match = items.find(p => p.name.toLowerCase().includes(q));
+  if (!match) return { content: [{ type: "text", text: `No product matching '${product_name}'` }] };
+  const data = await api("PATCH", `/admin/products/${match.id}`, { retail_price });
+  return { content: [{ type: "text", text: `${data.name}: price updated to ₹${data.retail_price}` }] };
+});
+
+server.tool("get_stock_status", "Get stock levels for all products — shows what needs restocking", {}, async () => {
+  await ensureToken();
+  const data = await api("GET", `/admin/analytics/products?days=30`);
+  const stock = data.stock || [];
+  const out = stock.filter(p => p.status === 'out');
+  const low = stock.filter(p => p.status === 'low');
+  const ok = stock.filter(p => p.status === 'ok');
+
+  let msg = `Stock Status (${stock.length} products):\n\n`;
+  if (out.length) msg += `🔴 OUT OF STOCK:\n${out.map(p => `  ${p.name} (${p.sku}): 0`).join('\n')}\n\n`;
+  if (low.length) msg += `🟡 LOW STOCK:\n${low.map(p => `  ${p.name} (${p.sku}): ${p.stock} (threshold: ${p.threshold})`).join('\n')}\n\n`;
+  msg += `🟢 IN STOCK: ${ok.length} products\n${ok.map(p => `  ${p.name}: ${p.stock}`).join('\n')}`;
+  return { content: [{ type: "text", text: msg }] };
+});
+
+server.tool("bulk_update_stock", "Update stock for multiple products at once", {
+  updates: z.array(z.object({
+    product_name: z.string(),
+    quantity: z.number(),
+  })).describe("Array of {product_name, quantity} to update"),
+}, async ({ updates }) => {
+  await ensureToken();
+  const products = await api("GET", "/products/?per_page=50");
+  const items = products.items || [];
+  const results = [];
+
+  for (const { product_name, quantity } of updates) {
+    const q = product_name.toLowerCase();
+    const match = items.find(p => p.name.toLowerCase().includes(q));
+    if (!match) { results.push(`${product_name}: NOT FOUND`); continue; }
+    try {
+      await api("PATCH", `/admin/products/${match.id}/stock?quantity=${quantity}`);
+      results.push(`${match.name}: → ${quantity}`);
+    } catch (e) { results.push(`${match.name}: FAILED — ${e.message}`); }
+  }
+  return { content: [{ type: "text", text: `Stock updated:\n${results.join('\n')}` }] };
+});
+
+server.tool("delete_customer", "Deactivate a customer account", {
+  user_id: z.string().describe("Customer UUID"),
+}, async ({ user_id }) => {
+  await ensureToken();
+  const data = await api("DELETE", `/admin/customers/${user_id}`);
+  return { content: [{ type: "text", text: data.message }] };
+});
+
+server.tool("create_admin_account", "Create a new admin or staff account for the admin panel", {
+  full_name: z.string(),
+  email: z.string(),
+  phone: z.string(),
+  password: z.string(),
+  role: z.string().default("admin").describe("'admin' for full access, 'staff' for limited"),
+}, async ({ full_name, email, phone, password, role }) => {
+  await ensureToken();
+  const data = await api("POST", "/admin/customers/create-admin", { full_name, email, phone, password, role });
+  return { content: [{ type: "text", text: `${data.message}: ${data.email} (ID: ${data.id})` }] };
+});
+
+server.tool("get_analytics_revenue", "Get revenue analytics — daily trend, by product, growth rate", {
+  days: z.number().default(30),
+}, async ({ days }) => {
+  await ensureToken();
+  const data = await api("GET", `/admin/analytics/revenue?days=${days}`);
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("get_analytics_customers", "Get customer analytics — totals, top 10, by type/tier", {}, async () => {
+  await ensureToken();
+  const data = await api("GET", "/admin/analytics/customers");
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("get_analytics_financials", "Get financial analytics — GST, invoiced, outstanding, payment methods", {
+  days: z.number().default(30),
+}, async ({ days }) => {
+  await ensureToken();
+  const data = await api("GET", `/admin/analytics/financials?days=${days}`);
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
 // ── bulk operations ───────────────────────────────────────────────
 
 server.tool("bulk_update_orders", "Update status of multiple orders at once (e.g., ship all packed orders)", {
