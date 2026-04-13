@@ -107,6 +107,23 @@ server.tool("create_product", "Create a new product", {
   return { content: [{ type: "text", text: `Product created: ${data.name} (${data.sku}) — ₹${data.retail_price}` }] };
 });
 
+server.tool("update_product", "Update a product's details — price, name, stock, description, etc.", {
+  product_id: z.string().describe("Product UUID"),
+  retail_price: z.number().optional().describe("New retail price"),
+  wholesale_price: z.number().optional().describe("New wholesale price"),
+  name: z.string().optional(),
+  description: z.string().optional(),
+  short_description: z.string().optional(),
+  stock_quantity: z.number().optional(),
+  is_active: z.boolean().optional(),
+  is_featured: z.boolean().optional(),
+}, async ({ product_id, ...updates }) => {
+  await ensureToken();
+  const clean = Object.fromEntries(Object.entries(updates).filter(([_, v]) => v !== undefined));
+  const data = await api("PATCH", `/admin/products/${product_id}`, clean);
+  return { content: [{ type: "text", text: `Updated ${data.name}: retail=${data.retail_price}, wholesale=${data.wholesale_price}, stock=${data.stock_quantity}` }] };
+});
+
 server.tool("update_stock", "Update a product's stock quantity", {
   product_id: z.string().describe("Product UUID"),
   quantity: z.number().describe("New stock quantity"),
