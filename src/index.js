@@ -4,10 +4,29 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
+// ── logging ───────────────────────────────────────────────────────
+const LOG_LEVEL = process.env.LOG_LEVEL || "info";
+const LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
+
+function log(level, message, metadata = {}) {
+  if (LEVELS[level] >= LEVELS[LOG_LEVEL]) {
+    const timestamp = new Date().toISOString();
+    const meta = Object.keys(metadata).length > 0 ? ` ${JSON.stringify(metadata)}` : "";
+    console.error(`[${timestamp}] [${level.toUpperCase()}] ${message}${meta}`);
+  }
+}
+
 const API_BASE = process.env.SRE_API_URL || "https://jzwp96mgv2.execute-api.ap-south-1.amazonaws.com/prod/api/v1";
 let TOKEN = process.env.SRE_ADMIN_TOKEN || "";
+let TOKEN_REFRESH_IN_PROGRESS = false;
 
-async function api(method, path, body = null) {
+// Validate required environment variables
+if (!TOKEN && (!process.env.SRE_ADMIN_EMAIL || !process.env.SRE_ADMIN_PASSWORD)) {
+  log("error", "Missing required environment variables: SRE_ADMIN_TOKEN or (SRE_ADMIN_EMAIL + SRE_ADMIN_PASSWORD)");
+  process.exit(1);
+}
+
+async function api(method, path, body = null, retryOnAuth = true) {
   const opts = {
     method,
     headers: { "Content-Type": "application/json" },
@@ -16,24 +35,68 @@ async function api(method, path, body = null) {
   if (TOKEN) opts.headers["Authorization"] = `Bearer ${TOKEN}`;
   if (body) opts.body = JSON.stringify(body);
 
-  // follow 307 redirects by re-requesting with auth
+  log("debug", "API request", { method, path });
+
+  // Follow 307 redirects with auth headers
   let res = await fetch(`${API_BASE}${path}`, opts);
   if (res.status === 307) {
     const location = res.headers.get("location");
-    if (location) res = await fetch(location, opts);
+    if (location) {
+      log("debug", "Following redirect", { location });
+      res = await fetch(location, opts);
+    }
   }
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.detail || JSON.stringify(data));
+
+  // Handle 401 Unauthorized - token expired
+  if (res.status === 401 && retryOnAuth && path !== "/auth/login") {
+    log("warn", "Token expired, refreshing authentication");
+
+    // Prevent concurrent token refreshes
+    if (TOKEN_REFRESH_IN_PROGRESS) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      return api(method, path, body, false);
+    }
+
+    TOKEN_REFRESH_IN_PROGRESS = true;
+    TOKEN = "";
+    try {
+      await ensureToken();
+      log("info", "Token refreshed, retrying request");
+      return api(method, path, body, false);
+    } catch (refreshError) {
+      log("error", "Token refresh failed", { error: refreshError.message });
+      throw refreshError;
+    } finally {
+      TOKEN_REFRESH_IN_PROGRESS = false;
+    }
+  }
+
+  const data = await res.json().catch(() => ({}));
+
+  if (!res.ok) {
+    const errorMsg = data.detail || data.message || JSON.stringify(data);
+    log("error", "API error", { status: res.status, path, error: errorMsg });
+    throw new Error(`API ${res.status}: ${errorMsg}`);
+  }
+
+  log("debug", "API success", { status: res.status, path });
   return data;
 }
 
 async function ensureToken() {
   if (TOKEN) return;
+
+  if (!process.env.SRE_ADMIN_EMAIL || !process.env.SRE_ADMIN_PASSWORD) {
+    throw new Error("Authentication required: Set SRE_ADMIN_TOKEN or (SRE_ADMIN_EMAIL + SRE_ADMIN_PASSWORD)");
+  }
+
+  log("info", "Authenticating with API", { email: process.env.SRE_ADMIN_EMAIL });
   const data = await api("POST", "/auth/login", {
-    identifier: process.env.SRE_ADMIN_EMAIL || "admin@sre.local",
-    password: process.env.SRE_ADMIN_PASSWORD || "SreAdmin2026",
+    identifier: process.env.SRE_ADMIN_EMAIL,
+    password: process.env.SRE_ADMIN_PASSWORD,
   });
   TOKEN = data.access_token;
+  log("info", "Authentication successful");
 }
 
 // ── server ────────────────────────────────────────────────────────
@@ -45,13 +108,13 @@ const server = new McpServer({
 
 // ── dashboard ─────────────────────────────────────────────────────
 
-server.tool("get_dashboard", "Get business dashboard summary — revenue, orders, customers, pending orders", {}, async () => {
+server.tool("get_dashboard", "Get business dashboard summary with key metrics.\n\nReturns: Total revenue, order counts (today/this week/this month), active customers, pending orders. Use for morning briefing or quick business health check.", {}, async () => {
   await ensureToken();
   const data = await api("GET", "/admin/dashboard/summary");
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 });
 
-server.tool("get_sales_chart", "Get daily sales data for a period", {
+server.tool("get_sales_chart", "Get daily sales data for a period.\n\nReturns: Daily revenue breakdown for specified days. Use to visualize sales trends and identify peak days.", {
   days: z.number().default(30).describe("Number of days of history"),
 }, async ({ days }) => {
   await ensureToken();
@@ -61,7 +124,7 @@ server.tool("get_sales_chart", "Get daily sales data for a period", {
 
 // ── orders ────────────────────────────────────────────────────────
 
-server.tool("list_orders", "List orders with optional status filter", {
+server.tool("list_orders", "List orders with optional status filter.\n\nReturns: Array of orders with customer info, totals, and current status. Use to view all orders or filter by status (pending, confirmed, processing, packed, shipped, out_for_delivery, delivered, cancelled).", {
   status: z.string().optional().describe("Filter: pending, confirmed, processing, packed, shipped, out_for_delivery, delivered, cancelled"),
   per_page: z.number().default(20),
 }, async ({ status, per_page }) => {
@@ -72,7 +135,7 @@ server.tool("list_orders", "List orders with optional status filter", {
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 });
 
-server.tool("get_order", "Get full details of a specific order", {
+server.tool("get_order", "Get full details of a specific order.\n\nReturns: Complete order info including items, customer, shipping, payment status, and timeline. Use to review order details or troubleshoot issues.", {
   order_id: z.string().describe("Order UUID"),
 }, async ({ order_id }) => {
   await ensureToken();
@@ -80,7 +143,7 @@ server.tool("get_order", "Get full details of a specific order", {
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 });
 
-server.tool("update_order_status", "Update an order's status (e.g., mark as shipped, delivered)", {
+server.tool("update_order_status", "Update an order's status (e.g., mark as shipped, delivered).\n\nReturns: Updated order with new status. Use to progress orders through fulfillment pipeline: confirmed → processing → packed → shipped → out_for_delivery → delivered.", {
   order_id: z.string().describe("Order UUID"),
   status: z.string().describe("New status: confirmed, processing, packed, shipped, out_for_delivery, delivered, cancelled"),
   notes: z.string().optional().describe("Optional notes about this status change"),
@@ -92,13 +155,13 @@ server.tool("update_order_status", "Update an order's status (e.g., mark as ship
 
 // ── products ──────────────────────────────────────────────────────
 
-server.tool("list_products", "List all products with prices and stock", {}, async () => {
+server.tool("list_products", "List all products with prices and stock.\n\nReturns: All products with SKU, retail/wholesale prices, and current stock quantities. Use to view catalog or check inventory levels.", {}, async () => {
   await ensureToken();
   const data = await api("GET", "/products?per_page=50");
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 });
 
-server.tool("create_product", "Create a new product", {
+server.tool("create_product", "Create a new product.\n\nReturns: New product with UUID and all details. Use to add new items to catalog.", {
   name: z.string(),
   sku: z.string(),
   retail_price: z.number(),
@@ -141,7 +204,7 @@ server.tool("update_stock", "Update a product's stock quantity", {
 
 // ── customers ─────────────────────────────────────────────────────
 
-server.tool("list_customers", "List customers with optional search", {
+server.tool("list_customers", "List customers with optional search.\n\nReturns: Customer records with contact info, type (retail/wholesale), tier, and credit limits. Use to find customers or filter by type.", {
   search: z.string().optional().describe("Search by name, phone, or business"),
   customer_type: z.string().optional().describe("Filter: retail or wholesale"),
 }, async ({ search, customer_type }) => {
@@ -218,23 +281,9 @@ server.tool("record_payment", "Record a payment received from a customer", {
   return { content: [{ type: "text", text: `Payment ₹${data.amount} recorded. New balance: ₹${data.running_balance}` }] };
 });
 
-// ── delivery ──────────────────────────────────────────────────────
-
-server.tool("get_pending_dispatch", "Get orders ready for dispatch", {}, async () => {
-  await ensureToken();
-  const data = await api("GET", "/admin/delivery/pending");
-  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
-});
-
-server.tool("get_active_deliveries", "Get orders currently being delivered", {}, async () => {
-  await ensureToken();
-  const data = await api("GET", "/admin/delivery");
-  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
-});
-
 // ── retention ─────────────────────────────────────────────────────
 
-server.tool("get_churn_summary", "Get customer retention summary — tier distribution, churn risks, volume drops", {}, async () => {
+server.tool("get_churn_summary", "Get customer retention summary — tier distribution, churn risks, volume drops.\n\nReturns: Customer tier counts, reorder gap alerts, volume drop alerts. Use to identify at-risk customers and churn trends.", {}, async () => {
   await ensureToken();
   const data = await api("GET", "/admin/retention/churn-summary");
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
@@ -386,7 +435,7 @@ server.tool("get_analytics_financials", "Get financial analytics — GST, invoic
 
 // ── bulk operations ───────────────────────────────────────────────
 
-server.tool("bulk_update_orders", "Update status of multiple orders at once (e.g., ship all packed orders)", {
+server.tool("bulk_update_orders", "Update status of multiple orders at once (e.g., ship all packed orders).\n\nReturns: Count of updated orders and list with success/failure per order. Use to batch-transition orders (e.g., packed → shipped, confirmed → processing).", {
   status_from: z.string().describe("Current status to filter by (e.g., 'packed')"),
   status_to: z.string().describe("New status to set (e.g., 'shipped')"),
   notes: z.string().optional(),
@@ -408,7 +457,7 @@ server.tool("bulk_update_orders", "Update status of multiple orders at once (e.g
 
 // ── reports ───────────────────────────────────────────────────────
 
-server.tool("daily_summary", "Morning briefing — orders, revenue, pending dispatch, churn alerts, stock warnings in one call", {}, async () => {
+server.tool("daily_summary", "Morning briefing — orders, revenue, pending dispatch, churn alerts, stock warnings in one call.\n\nReturns: Aggregated dashboard, delivery pipeline, customer health, and inventory alerts. Use for daily standup or overnight summary. Makes 5 parallel API calls.", {}, async () => {
   await ensureToken();
   const [dashboard, pending, active, churn, products] = await Promise.all([
     api("GET", "/admin/dashboard/summary"),
@@ -431,7 +480,7 @@ server.tool("daily_summary", "Morning briefing — orders, revenue, pending disp
   return { content: [{ type: "text", text: JSON.stringify(summary, null, 2) }] };
 });
 
-server.tool("revenue_report", "Revenue breakdown by period — daily, weekly, or monthly totals", {
+server.tool("revenue_report", "Revenue breakdown by period — daily, weekly, or monthly totals.\n\nReturns: Total revenue, order count, average order value, and breakdown by product. Use to analyze sales trends and product performance.", {
   days: z.number().default(30).describe("Period in days"),
 }, async ({ days }) => {
   await ensureToken();
@@ -464,7 +513,7 @@ server.tool("revenue_report", "Revenue breakdown by period — daily, weekly, or
   }, null, 2) }] };
 });
 
-server.tool("customer_report", "Customer insights — top customers, new vs returning, at-risk", {}, async () => {
+server.tool("customer_report", "Customer insights — top customers, new vs returning, at-risk.\n\nReturns: Total customer count, new customers (30 days), top 10 by revenue, type/tier distribution, churn risks. Use to identify key accounts and growth opportunities.", {}, async () => {
   await ensureToken();
   const [customers, orders, churn] = await Promise.all([
     api("GET", "/admin/customers?per_page=100"),
@@ -659,5 +708,7 @@ server.tool("delete_tea_stock", "Remove a tea type from stock tracking", {
 
 // ── start ─────────────────────────────────────────────────────────
 
+log("info", "Server starting", { name: "sre-tea-admin", version: "1.0.0" });
 const transport = new StdioServerTransport();
 await server.connect(transport);
+log("info", "Server connected to transport");
