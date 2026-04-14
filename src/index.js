@@ -176,7 +176,7 @@ server.tool("create_product", "Create a new product.\n\nReturns: New product wit
   return { content: [{ type: "text", text: `Product created: ${data.name} (${data.sku}) — ₹${data.retail_price}` }] };
 });
 
-server.tool("update_product", "Update a product's details — price, name, stock, description, etc.", {
+server.tool("update_product", "Update a product's details — price, name, stock, description, etc.\n\nReturns: Updated product with all fields. Use to modify any product attribute.", {
   product_id: z.string().describe("Product UUID"),
   retail_price: z.number().optional().describe("New retail price"),
   wholesale_price: z.number().optional().describe("New wholesale price"),
@@ -193,7 +193,7 @@ server.tool("update_product", "Update a product's details — price, name, stock
   return { content: [{ type: "text", text: `Updated ${data.name}: retail=${data.retail_price}, wholesale=${data.wholesale_price}, stock=${data.stock_quantity}` }] };
 });
 
-server.tool("update_stock", "Update a product's stock quantity", {
+server.tool("update_stock", "Update a product's stock quantity.\n\nReturns: Product with new stock level. Use to adjust inventory after sales or purchases.", {
   product_id: z.string().describe("Product UUID"),
   quantity: z.number().describe("New stock quantity"),
 }, async ({ product_id, quantity }) => {
@@ -216,7 +216,7 @@ server.tool("list_customers", "List customers with optional search.\n\nReturns: 
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 });
 
-server.tool("get_customer", "Get detailed info about a specific customer", {
+server.tool("get_customer", "Get detailed info about a specific customer.\n\nReturns: Complete customer profile with contact, type, tier, credit limit, and order history. Use to review customer details.", {
   user_id: z.string().describe("Customer UUID"),
 }, async ({ user_id }) => {
   await ensureToken();
@@ -224,7 +224,7 @@ server.tool("get_customer", "Get detailed info about a specific customer", {
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 });
 
-server.tool("update_customer", "Update customer type, credit limit, or tier", {
+server.tool("update_customer", "Update customer type, credit limit, or tier.\n\nReturns: Updated customer profile. Use to modify customer classification or credit terms.", {
   user_id: z.string().describe("Customer UUID"),
   customer_type: z.string().optional().describe("retail or wholesale"),
   credit_limit: z.number().optional(),
@@ -237,13 +237,13 @@ server.tool("update_customer", "Update customer type, credit limit, or tier", {
 
 // ── invoices ──────────────────────────────────────────────────────
 
-server.tool("list_invoices", "List all invoices", {}, async () => {
+server.tool("list_invoices", "List all invoices.\n\nReturns: All generated GST invoices with amounts, dates, and payment status. Use to review billing history.", {}, async () => {
   await ensureToken();
   const data = await api("GET", "/admin/invoices");
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 });
 
-server.tool("generate_invoice", "Generate a GST invoice for an order", {
+server.tool("generate_invoice", "Generate a GST invoice for an order.\n\nReturns: Invoice with CGST, SGST amounts. Use to bill orders and generate tax documentation.", {
   order_id: z.string().describe("Order UUID"),
   due_date: z.string().optional().describe("Due date in YYYY-MM-DD format"),
 }, async ({ order_id, due_date }) => {
@@ -256,13 +256,13 @@ server.tool("generate_invoice", "Generate a GST invoice for an order", {
 
 // ── ledger ────────────────────────────────────────────────────────
 
-server.tool("get_outstanding_balances", "Get all customers with outstanding credit balances", {}, async () => {
+server.tool("get_outstanding_balances", "Get all customers with outstanding credit balances.\n\nReturns: Customers with credit owed, amounts, and aging. Use to track receivables and collection priorities.", {}, async () => {
   await ensureToken();
   const data = await api("GET", "/admin/ledger/outstanding");
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 });
 
-server.tool("get_customer_ledger", "Get ledger entries for a specific customer", {
+server.tool("get_customer_ledger", "Get ledger entries for a specific customer.\n\nReturns: Transaction history with invoices, payments, and running balance. Use to review customer account activity.", {
   user_id: z.string().describe("Customer UUID"),
 }, async ({ user_id }) => {
   await ensureToken();
@@ -270,7 +270,7 @@ server.tool("get_customer_ledger", "Get ledger entries for a specific customer",
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 });
 
-server.tool("record_payment", "Record a payment received from a customer", {
+server.tool("record_payment", "Record a payment received from a customer.\n\nReturns: Payment record with updated balance. Use to log UPI, cheque, or cash payments.", {
   user_id: z.string().describe("Customer UUID"),
   amount: z.number().describe("Payment amount in rupees"),
   reference_number: z.string().optional().describe("UPI UTR, cheque number, etc."),
@@ -289,19 +289,19 @@ server.tool("get_churn_summary", "Get customer retention summary — tier distri
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 });
 
-server.tool("get_reorder_gaps", "Get customers who are overdue for their next order (churn risk)", {}, async () => {
+server.tool("get_reorder_gaps", "Get customers who are overdue for their next order (churn risk).\n\nReturns: Customers past expected reorder date with risk levels. Use to prioritize retention outreach.", {}, async () => {
   await ensureToken();
   const data = await api("GET", "/admin/retention/reorder-gaps");
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 });
 
-server.tool("get_volume_drops", "Get customers whose order volume dropped 20%+ recently", {}, async () => {
+server.tool("get_volume_drops", "Get customers whose order volume dropped 20%+ recently.\n\nReturns: Customers with volume decrease and prior volumes. Use to identify troubled accounts.", {}, async () => {
   await ensureToken();
   const data = await api("GET", "/admin/retention/volume-drops");
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 });
 
-server.tool("classify_tiers", "Reclassify all customers into A/B/C tiers based on recent behavior", {}, async () => {
+server.tool("classify_tiers", "Reclassify all customers into A/B/C tiers based on recent behavior.\n\nReturns: Counts of customers in each tier. Use to update customer segmentation monthly.", {}, async () => {
   await ensureToken();
   const data = await api("POST", "/admin/retention/classify-tiers");
   return { content: [{ type: "text", text: `Tiers updated: A=${data.counts.A}, B=${data.counts.B}, C=${data.counts.C}` }] };
@@ -309,7 +309,7 @@ server.tool("classify_tiers", "Reclassify all customers into A/B/C tiers based o
 
 // ── logistics ─────────────────────────────────────────────────────
 
-server.tool("get_logistics_kpis", "Get delivery logistics KPIs — trips, kg delivered, cost per kg", {
+server.tool("get_logistics_kpis", "Get delivery logistics KPIs — trips, kg delivered, cost per kg.\n\nReturns: Delivery efficiency metrics for specified period. Use to monitor logistics performance.", {
   days: z.number().default(30),
 }, async ({ days }) => {
   await ensureToken();
@@ -317,7 +317,7 @@ server.tool("get_logistics_kpis", "Get delivery logistics KPIs — trips, kg del
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 });
 
-server.tool("get_slab_pricing", "Get current slab pricing for all products", {}, async () => {
+server.tool("get_slab_pricing", "Get current slab pricing for all products.\n\nReturns: Volume-based pricing tiers for products. Use to quote wholesale customers.", {}, async () => {
   await ensureToken();
   const data = await api("GET", "/admin/retention/slab-pricing");
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
@@ -325,7 +325,7 @@ server.tool("get_slab_pricing", "Get current slab pricing for all products", {},
 
 // ── smart stock + product management ─────────────────────────────
 
-server.tool("update_stock_by_name", "Update stock for a product by name (e.g., 'Rajalakshmi Gold - 250g')", {
+server.tool("update_stock_by_name", "Update stock for a product by name (e.g., 'Rajalakshmi Gold - 250g').\n\nReturns: Product with updated stock. Use for quick inventory adjustments without UUID.", {
   product_name: z.string().describe("Product name or partial match like 'Gold 250g' or 'Royal 1kg'"),
   quantity: z.number().describe("New stock quantity"),
 }, async ({ product_name, quantity }) => {
@@ -339,7 +339,7 @@ server.tool("update_stock_by_name", "Update stock for a product by name (e.g., '
   return { content: [{ type: "text", text: `${match.name}: stock updated to ${data.stock_quantity}` }] };
 });
 
-server.tool("update_price_by_name", "Update price for a product by name", {
+server.tool("update_price_by_name", "Update price for a product by name.\n\nReturns: Product with new price. Use for quick pricing updates.", {
   product_name: z.string().describe("Product name or partial match"),
   retail_price: z.number().describe("New retail price"),
 }, async ({ product_name, retail_price }) => {
@@ -353,7 +353,7 @@ server.tool("update_price_by_name", "Update price for a product by name", {
   return { content: [{ type: "text", text: `${data.name}: price updated to ₹${data.retail_price}` }] };
 });
 
-server.tool("get_stock_status", "Get stock levels for all products — shows what needs restocking", {}, async () => {
+server.tool("get_stock_status", "Get stock levels for all products — shows what needs restocking.\n\nReturns: Products categorized as out, low, or in stock with priorities. Use for inventory planning.", {}, async () => {
   await ensureToken();
   const data = await api("GET", `/admin/analytics/products?days=30`);
   const stock = data.stock || [];
@@ -368,7 +368,7 @@ server.tool("get_stock_status", "Get stock levels for all products — shows wha
   return { content: [{ type: "text", text: msg }] };
 });
 
-server.tool("bulk_update_stock", "Update stock for multiple products at once", {
+server.tool("bulk_update_stock", "Update stock for multiple products at once.\n\nReturns: List of updates with per-product success/failure. Use for batch inventory operations.", {
   updates: z.array(z.object({
     product_name: z.string(),
     quantity: z.number(),
@@ -391,7 +391,7 @@ server.tool("bulk_update_stock", "Update stock for multiple products at once", {
   return { content: [{ type: "text", text: `Stock updated:\n${results.join('\n')}` }] };
 });
 
-server.tool("delete_customer", "Deactivate a customer account", {
+server.tool("delete_customer", "Deactivate a customer account.\n\nReturns: Confirmation message. Use to archive inactive customers.", {
   user_id: z.string().describe("Customer UUID"),
 }, async ({ user_id }) => {
   await ensureToken();
@@ -399,7 +399,7 @@ server.tool("delete_customer", "Deactivate a customer account", {
   return { content: [{ type: "text", text: data.message }] };
 });
 
-server.tool("create_admin_account", "Create a new admin or staff account for the admin panel", {
+server.tool("create_admin_account", "Create a new admin or staff account for the admin panel.\n\nReturns: New account with credentials. Use to onboard team members.", {
   full_name: z.string(),
   email: z.string(),
   phone: z.string(),
@@ -411,7 +411,7 @@ server.tool("create_admin_account", "Create a new admin or staff account for the
   return { content: [{ type: "text", text: `${data.message}: ${data.email} (ID: ${data.id})` }] };
 });
 
-server.tool("get_analytics_revenue", "Get revenue analytics — daily trend, by product, growth rate", {
+server.tool("get_analytics_revenue", "Get revenue analytics — daily trend, by product, growth rate.\n\nReturns: Daily breakdown, product-wise revenue, trend analysis. Use to analyze sales performance.", {
   days: z.number().default(30),
 }, async ({ days }) => {
   await ensureToken();
@@ -419,13 +419,13 @@ server.tool("get_analytics_revenue", "Get revenue analytics — daily trend, by 
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 });
 
-server.tool("get_analytics_customers", "Get customer analytics — totals, top 10, by type/tier", {}, async () => {
+server.tool("get_analytics_customers", "Get customer analytics — totals, top 10, by type/tier.\n\nReturns: Customer counts by segment, type/tier distribution. Use to understand customer composition.", {}, async () => {
   await ensureToken();
   const data = await api("GET", "/admin/analytics/customers");
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 });
 
-server.tool("get_analytics_financials", "Get financial analytics — GST, invoiced, outstanding, payment methods", {
+server.tool("get_analytics_financials", "Get financial analytics — GST, invoiced, outstanding, payment methods.\n\nReturns: Tax breakdowns, invoice totals, receivables, payment method distribution. Use for financial reporting.", {
   days: z.number().default(30),
 }, async ({ days }) => {
   await ensureToken();
@@ -552,7 +552,7 @@ server.tool("customer_report", "Customer insights — top customers, new vs retu
   }, null, 2) }] };
 });
 
-server.tool("margin_calculator", "Calculate profit margin given buy and sell prices", {
+server.tool("margin_calculator", "Calculate profit margin given buy and sell prices.\n\nReturns: Profit/loss with margin %, GST amount, per-kg breakdown. Use for pricing decisions.", {
   buy_price_per_kg: z.number().describe("Purchase price per kg"),
   sell_price_per_kg: z.number().describe("Selling price per kg"),
   volume_kg: z.number().default(1).describe("Volume in kg"),
@@ -576,7 +576,7 @@ server.tool("margin_calculator", "Calculate profit margin given buy and sell pri
   }, null, 2) }] };
 });
 
-server.tool("search_orders", "Search orders by customer name, phone, date range, or amount", {
+server.tool("search_orders", "Search orders by customer name, phone, date range, or amount.\n\nReturns: Matching orders with summaries. Use to find specific orders quickly.", {
   query: z.string().optional().describe("Search by order number or customer"),
   status: z.string().optional(),
   days: z.number().default(30).describe("Look back N days"),
@@ -613,7 +613,7 @@ server.tool("search_orders", "Search orders by customer name, phone, date range,
   return { content: [{ type: "text", text: JSON.stringify({ count: summary.length, orders: summary }, null, 2) }] };
 });
 
-server.tool("restock_alert", "Check which products are low on stock and need restocking", {}, async () => {
+server.tool("restock_alert", "Check which products are low on stock and need restocking.\n\nReturns: Out-of-stock products, low-stock items with thresholds, and healthy inventory. Use for procurement planning.", {}, async () => {
   await ensureToken();
   const data = await api("GET", "/products?per_page=50");
   const products = data.items || [];
@@ -630,7 +630,7 @@ server.tool("restock_alert", "Check which products are low on stock and need res
 
 // ── bulk customer management ─────────────────────────────────────
 
-server.tool("bulk_upload_customers", "Upload multiple customers at once from CSV/JSON data", {
+server.tool("bulk_upload_customers", "Upload multiple customers at once from CSV/JSON data.\n\nReturns: Count of created, skipped (duplicates), and errored records. Use for batch customer imports.", {
   customers: z.array(z.object({
     name: z.string(),
     phone: z.string(),
@@ -663,7 +663,7 @@ server.tool("get_active_deliveries", "Get orders currently out for delivery", {}
 
 // ── raw tea stock (warehouse kg) ─────────────────────────────────
 
-server.tool("get_tea_stock", "Get raw tea stock levels — total kg by tea type in warehouse", {}, async () => {
+server.tool("get_tea_stock", "Get raw tea stock levels — total kg by tea type in warehouse.\n\nReturns: Tea types with quantities, last purchase info, and purchase prices. Use for raw material planning.", {}, async () => {
   await ensureToken();
   const data = await api("GET", "/admin/analytics/tea-stock");
   if (!data?.length) return { content: [{ type: "text", text: "No tea types in stock tracking yet" }] };
@@ -671,7 +671,7 @@ server.tool("get_tea_stock", "Get raw tea stock levels — total kg by tea type 
   return { content: [{ type: "text", text: `Raw Tea Stock:\n${lines.join('\n')}` }] };
 });
 
-server.tool("create_tea_stock", "Add a new tea type to warehouse stock tracking", {
+server.tool("create_tea_stock", "Add a new tea type to warehouse stock tracking.\n\nReturns: New tea stock record with UUID. Use to start tracking new tea types.", {
   tea_type: z.string().describe("Name of the tea type (e.g., 'Nilgiri Dust', 'Assam CTC')"),
   total_kg: z.number().default(0).describe("Initial stock in kg"),
   purchase_price_per_kg: z.number().default(0).describe("Purchase price per kg"),
@@ -681,7 +681,7 @@ server.tool("create_tea_stock", "Add a new tea type to warehouse stock tracking"
   return { content: [{ type: "text", text: `Tea type '${data.tea_type}' added with ${data.total_kg} kg` }] };
 });
 
-server.tool("update_tea_stock", "Add or reduce raw tea stock for a tea type", {
+server.tool("update_tea_stock", "Add or reduce raw tea stock for a tea type.\n\nReturns: Updated tea stock with new total kg. Use to log purchases or packing usage.", {
   stock_id: z.string().describe("Tea stock UUID"),
   add_kg: z.number().optional().describe("Kg to ADD (new purchase from supplier)"),
   reduce_kg: z.number().optional().describe("Kg to REDUCE (used for packing)"),
@@ -698,7 +698,7 @@ server.tool("update_tea_stock", "Add or reduce raw tea stock for a tea type", {
   return { content: [{ type: "text", text: `${data.tea_type}: now ${data.total_kg} kg` }] };
 });
 
-server.tool("delete_tea_stock", "Remove a tea type from stock tracking", {
+server.tool("delete_tea_stock", "Remove a tea type from stock tracking.\n\nReturns: Confirmation message. Use to stop tracking discontinued tea types.", {
   stock_id: z.string().describe("Tea stock UUID"),
 }, async ({ stock_id }) => {
   await ensureToken();
