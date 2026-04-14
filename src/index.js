@@ -94,7 +94,7 @@ server.tool("update_order_status", "Update an order's status (e.g., mark as ship
 
 server.tool("list_products", "List all products with prices and stock", {}, async () => {
   await ensureToken();
-  const data = await api("GET", "/products/?per_page=50");
+  const data = await api("GET", "/products?per_page=50");
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 });
 
@@ -281,7 +281,7 @@ server.tool("update_stock_by_name", "Update stock for a product by name (e.g., '
   quantity: z.number().describe("New stock quantity"),
 }, async ({ product_name, quantity }) => {
   await ensureToken();
-  const products = await api("GET", "/products/?per_page=50");
+  const products = await api("GET", "/products?per_page=50");
   const items = products.items || [];
   const q = product_name.toLowerCase();
   const match = items.find(p => p.name.toLowerCase().includes(q) || `${p.name} ${p.weight_display}`.toLowerCase().includes(q));
@@ -295,7 +295,7 @@ server.tool("update_price_by_name", "Update price for a product by name", {
   retail_price: z.number().describe("New retail price"),
 }, async ({ product_name, retail_price }) => {
   await ensureToken();
-  const products = await api("GET", "/products/?per_page=50");
+  const products = await api("GET", "/products?per_page=50");
   const items = products.items || [];
   const q = product_name.toLowerCase();
   const match = items.find(p => p.name.toLowerCase().includes(q));
@@ -326,7 +326,7 @@ server.tool("bulk_update_stock", "Update stock for multiple products at once", {
   })).describe("Array of {product_name, quantity} to update"),
 }, async ({ updates }) => {
   await ensureToken();
-  const products = await api("GET", "/products/?per_page=50");
+  const products = await api("GET", "/products?per_page=50");
   const items = products.items || [];
   const results = [];
 
@@ -415,7 +415,7 @@ server.tool("daily_summary", "Morning briefing — orders, revenue, pending disp
     api("GET", "/admin/delivery/pending").catch(() => []),
     api("GET", "/admin/delivery").catch(() => []),
     api("GET", "/admin/retention/churn-summary").catch(() => ({})),
-    api("GET", "/products/?per_page=50"),
+    api("GET", "/products?per_page=50"),
   ]);
 
   const lowStock = (products.items || []).filter(p => p.stock_quantity <= p.low_stock_threshold);
@@ -566,7 +566,7 @@ server.tool("search_orders", "Search orders by customer name, phone, date range,
 
 server.tool("restock_alert", "Check which products are low on stock and need restocking", {}, async () => {
   await ensureToken();
-  const data = await api("GET", "/products/?per_page=50");
+  const data = await api("GET", "/products?per_page=50");
   const products = data.items || [];
   const lowStock = products.filter(p => p.stock_quantity <= p.low_stock_threshold);
   const outOfStock = products.filter(p => p.stock_quantity === 0);
@@ -610,6 +610,51 @@ server.tool("get_active_deliveries", "Get orders currently out for delivery", {}
   if (!data?.length) return { content: [{ type: "text", text: "No active deliveries" }] };
   const lines = data.map(o => `${o.order_number} | ₹${o.total_amount} | ${o.shipping_address?.city || '—'} | ${o.status}`);
   return { content: [{ type: "text", text: `${data.length} active deliveries:\n${lines.join('\n')}` }] };
+});
+
+// ── raw tea stock (warehouse kg) ─────────────────────────────────
+
+server.tool("get_tea_stock", "Get raw tea stock levels — total kg by tea type in warehouse", {}, async () => {
+  await ensureToken();
+  const data = await api("GET", "/admin/analytics/tea-stock");
+  if (!data?.length) return { content: [{ type: "text", text: "No tea types in stock tracking yet" }] };
+  const lines = data.map(s => `${s.tea_type}: ${s.total_kg} kg (last buy: ${s.last_purchase_kg}kg @ ₹${s.purchase_price_per_kg}/kg)`);
+  return { content: [{ type: "text", text: `Raw Tea Stock:\n${lines.join('\n')}` }] };
+});
+
+server.tool("create_tea_stock", "Add a new tea type to warehouse stock tracking", {
+  tea_type: z.string().describe("Name of the tea type (e.g., 'Nilgiri Dust', 'Assam CTC')"),
+  total_kg: z.number().default(0).describe("Initial stock in kg"),
+  purchase_price_per_kg: z.number().default(0).describe("Purchase price per kg"),
+}, async ({ tea_type, total_kg, purchase_price_per_kg }) => {
+  await ensureToken();
+  const data = await api("POST", "/admin/analytics/tea-stock", { tea_type, total_kg, purchase_price_per_kg });
+  return { content: [{ type: "text", text: `Tea type '${data.tea_type}' added with ${data.total_kg} kg` }] };
+});
+
+server.tool("update_tea_stock", "Add or reduce raw tea stock for a tea type", {
+  stock_id: z.string().describe("Tea stock UUID"),
+  add_kg: z.number().optional().describe("Kg to ADD (new purchase from supplier)"),
+  reduce_kg: z.number().optional().describe("Kg to REDUCE (used for packing)"),
+  total_kg: z.number().optional().describe("Set exact total kg (override)"),
+  purchase_price_per_kg: z.number().optional().describe("Update purchase price per kg"),
+}, async ({ stock_id, add_kg, reduce_kg, total_kg, purchase_price_per_kg }) => {
+  await ensureToken();
+  const body = {};
+  if (add_kg !== undefined) body.add_kg = add_kg;
+  else if (reduce_kg !== undefined) body.reduce_kg = reduce_kg;
+  else if (total_kg !== undefined) body.total_kg = total_kg;
+  if (purchase_price_per_kg !== undefined) body.purchase_price_per_kg = purchase_price_per_kg;
+  const data = await api("PATCH", `/admin/analytics/tea-stock/${stock_id}`, body);
+  return { content: [{ type: "text", text: `${data.tea_type}: now ${data.total_kg} kg` }] };
+});
+
+server.tool("delete_tea_stock", "Remove a tea type from stock tracking", {
+  stock_id: z.string().describe("Tea stock UUID"),
+}, async ({ stock_id }) => {
+  await ensureToken();
+  const data = await api("DELETE", `/admin/analytics/tea-stock/${stock_id}`);
+  return { content: [{ type: "text", text: data.message }] };
 });
 
 // ── start ─────────────────────────────────────────────────────────
