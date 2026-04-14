@@ -579,6 +579,39 @@ server.tool("restock_alert", "Check which products are low on stock and need res
   }, null, 2) }] };
 });
 
+// ── bulk customer management ─────────────────────────────────────
+
+server.tool("bulk_upload_customers", "Upload multiple customers at once from CSV/JSON data", {
+  customers: z.array(z.object({
+    name: z.string(),
+    phone: z.string(),
+    email: z.string().optional(),
+    type: z.string().default("wholesale"),
+    business_name: z.string().optional(),
+    credit_limit: z.number().default(0),
+  })).describe("Array of customer objects to create"),
+}, async ({ customers }) => {
+  await ensureToken();
+  const data = await api("POST", "/admin/customers/bulk-upload", { customers });
+  return { content: [{ type: "text", text: `Bulk upload: ${data.created} created, ${data.skipped} skipped (duplicate), ${data.errors?.length || 0} errors` }] };
+});
+
+server.tool("get_pending_dispatch", "Get orders ready to be dispatched", {}, async () => {
+  await ensureToken();
+  const data = await api("GET", "/admin/delivery/pending");
+  if (!data?.length) return { content: [{ type: "text", text: "No orders pending dispatch" }] };
+  const lines = data.map(o => `${o.order_number} | ₹${o.total_amount} | ${o.shipping_address?.city || '—'} | ${o.status}`);
+  return { content: [{ type: "text", text: `${data.length} orders pending dispatch:\n${lines.join('\n')}` }] };
+});
+
+server.tool("get_active_deliveries", "Get orders currently out for delivery", {}, async () => {
+  await ensureToken();
+  const data = await api("GET", "/admin/delivery");
+  if (!data?.length) return { content: [{ type: "text", text: "No active deliveries" }] };
+  const lines = data.map(o => `${o.order_number} | ₹${o.total_amount} | ${o.shipping_address?.city || '—'} | ${o.status}`);
+  return { content: [{ type: "text", text: `${data.length} active deliveries:\n${lines.join('\n')}` }] };
+});
+
 // ── start ─────────────────────────────────────────────────────────
 
 const transport = new StdioServerTransport();
