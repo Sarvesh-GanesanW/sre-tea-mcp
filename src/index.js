@@ -706,6 +706,321 @@ server.tool("delete_tea_stock", "Remove a tea type from stock tracking.\n\nRetur
   return { content: [{ type: "text", text: data.message }] };
 });
 
+// ── bundles ───────────────────────────────────────────────────────
+
+server.tool("list_bundles", "List all product bundles.\n\nReturns: All bundles with items, pricing, and active state. Use to review bundle offerings.", {}, async () => {
+  await ensureToken();
+  const data = await api("GET", "/admin/bundles");
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("create_bundle", "Create a new product bundle (e.g., Gold+Royal combo).\n\nReturns: New bundle with UUID. Use to group products at discount.", {
+  name: z.string(),
+  slug: z.string().describe("URL-friendly name"),
+  description: z.string().optional(),
+  items: z.array(z.object({
+    product_id: z.string(),
+    quantity: z.number().int().min(1),
+  })),
+  bundle_price: z.number().nullable().optional(),
+  discount_pct: z.number().min(0).max(80).default(0),
+  is_active: z.boolean().default(true),
+}, async (body) => {
+  await ensureToken();
+  const data = await api("POST", "/admin/bundles", body);
+  return { content: [{ type: "text", text: `Bundle created: ${data.id}` }] };
+});
+
+server.tool("update_bundle", "Update a bundle's pricing, items, or active state.", {
+  bundle_id: z.string(),
+  name: z.string(),
+  slug: z.string(),
+  items: z.array(z.object({ product_id: z.string(), quantity: z.number().int() })),
+  bundle_price: z.number().nullable().optional(),
+  discount_pct: z.number(),
+  is_active: z.boolean(),
+}, async ({ bundle_id, ...body }) => {
+  await ensureToken();
+  await api("PATCH", `/admin/bundles/${bundle_id}`, body);
+  return { content: [{ type: "text", text: "Bundle updated" }] };
+});
+
+server.tool("delete_bundle", "Delete a bundle.", {
+  bundle_id: z.string(),
+}, async ({ bundle_id }) => {
+  await ensureToken();
+  await api("DELETE", `/admin/bundles/${bundle_id}`);
+  return { content: [{ type: "text", text: "Bundle deleted" }] };
+});
+
+// ── flash sales ───────────────────────────────────────────────────
+
+server.tool("list_flash_sales", "List all flash sales (scheduled + live + ended).", {}, async () => {
+  await ensureToken();
+  const data = await api("GET", "/admin/flash-sales");
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("create_flash_sale", "Create a timed discount. Empty product_ids = site-wide.\n\nReturns: Sale UUID. Use to run limited-time promos.", {
+  title: z.string(),
+  banner_text: z.string().optional(),
+  product_ids: z.array(z.string()).default([]),
+  discount_type: z.enum(["percentage", "fixed"]),
+  discount_value: z.number().positive(),
+  starts_at: z.string().describe("ISO 8601 datetime"),
+  ends_at: z.string().describe("ISO 8601 datetime"),
+  is_active: z.boolean().default(true),
+}, async (body) => {
+  await ensureToken();
+  const data = await api("POST", "/admin/flash-sales", body);
+  return { content: [{ type: "text", text: `Flash sale created: ${data.id}` }] };
+});
+
+server.tool("update_flash_sale", "Update flash sale timing, discount, or status.", {
+  sale_id: z.string(),
+  title: z.string(),
+  banner_text: z.string().optional(),
+  product_ids: z.array(z.string()),
+  discount_type: z.enum(["percentage", "fixed"]),
+  discount_value: z.number(),
+  starts_at: z.string(),
+  ends_at: z.string(),
+  is_active: z.boolean(),
+}, async ({ sale_id, ...body }) => {
+  await ensureToken();
+  await api("PATCH", `/admin/flash-sales/${sale_id}`, body);
+  return { content: [{ type: "text", text: "Flash sale updated" }] };
+});
+
+server.tool("delete_flash_sale", "Delete a flash sale.", {
+  sale_id: z.string(),
+}, async ({ sale_id }) => {
+  await ensureToken();
+  await api("DELETE", `/admin/flash-sales/${sale_id}`);
+  return { content: [{ type: "text", text: "Flash sale deleted" }] };
+});
+
+// ── tea batches (expiry tracking) ─────────────────────────────────
+
+server.tool("list_batches", "List tea batches with remaining stock + expiry dates.\n\nReturns: All batches sorted by expiry. Use for inventory rotation (FIFO).", {
+  include_depleted: z.boolean().default(false),
+}, async ({ include_depleted }) => {
+  await ensureToken();
+  const data = await api("GET", `/admin/batches?include_depleted=${include_depleted}`);
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("get_expiring_batches", "Batches expiring within N days (default 90). Use to flag flash-sale candidates.", {
+  within_days: z.number().int().default(90),
+}, async ({ within_days }) => {
+  await ensureToken();
+  const data = await api("GET", `/admin/batches/expiring?within_days=${within_days}`);
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("create_batch", "Record a new tea batch received from supplier.\n\nReturns: Batch UUID. Use for lot traceability + expiry tracking.", {
+  batch_no: z.string().describe("Unique batch/lot number from supplier"),
+  product_id: z.string().optional().nullable(),
+  tea_type: z.string().optional().describe("e.g. Premium Blend / Normal Blend"),
+  supplier_name: z.string().optional(),
+  quantity_kg: z.number().positive(),
+  received_date: z.string().describe("YYYY-MM-DD"),
+  expiry_date: z.string().describe("YYYY-MM-DD"),
+  cost_per_kg: z.number().optional().nullable(),
+  notes: z.string().optional(),
+}, async (body) => {
+  await ensureToken();
+  const data = await api("POST", "/admin/batches", body);
+  return { content: [{ type: "text", text: `Batch created: ${data.id}` }] };
+});
+
+server.tool("delete_batch", "Delete a batch record.", {
+  batch_id: z.string(),
+}, async ({ batch_id }) => {
+  await ensureToken();
+  await api("DELETE", `/admin/batches/${batch_id}`);
+  return { content: [{ type: "text", text: "Batch deleted" }] };
+});
+
+// ── tickets ───────────────────────────────────────────────────────
+
+server.tool("list_tickets", "List support tickets.\n\nReturns: Ticket summaries with customer, status, priority. Filter by status to triage.", {
+  status: z.enum(["open", "in_progress", "resolved", "closed"]).optional(),
+}, async ({ status }) => {
+  await ensureToken();
+  const q = status ? `?status=${status}` : "";
+  const data = await api("GET", `/admin/tickets${q}`);
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("get_ticket", "Get full ticket thread with all replies.", {
+  ticket_id: z.string(),
+}, async ({ ticket_id }) => {
+  await ensureToken();
+  const data = await api("GET", `/admin/tickets/${ticket_id}`);
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("reply_to_ticket", "Reply to a customer support ticket. Auto-emails customer.", {
+  ticket_id: z.string(),
+  body: z.string().min(1),
+}, async ({ ticket_id, body }) => {
+  await ensureToken();
+  await api("POST", `/admin/tickets/${ticket_id}/reply`, { body });
+  return { content: [{ type: "text", text: "Reply sent to customer" }] };
+});
+
+server.tool("update_ticket_status", "Update ticket status.", {
+  ticket_id: z.string(),
+  status: z.enum(["open", "in_progress", "resolved", "closed"]),
+}, async ({ ticket_id, status }) => {
+  await ensureToken();
+  await api("PATCH", `/admin/tickets/${ticket_id}/status`, { status });
+  return { content: [{ type: "text", text: `Status → ${status}` }] };
+});
+
+// ── newsletter ────────────────────────────────────────────────────
+
+server.tool("list_campaigns", "List all email newsletter campaigns with send stats.", {}, async () => {
+  await ensureToken();
+  const data = await api("GET", "/admin/newsletter");
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("preview_newsletter_recipients", "Count recipients for a newsletter segment before sending.", {
+  subject: z.string(),
+  body_html: z.string(),
+  segment: z.enum(["all", "retail", "wholesale", "tier_a", "tier_b", "tier_c"]).default("all"),
+}, async (body) => {
+  await ensureToken();
+  const data = await api("POST", "/admin/newsletter/preview", body);
+  return { content: [{ type: "text", text: `${data.count} recipients for segment '${data.segment}'` }] };
+});
+
+server.tool("send_newsletter", "Create draft + immediately send newsletter to a segment.\n\nReturns: Send stats (recipients, sent, errors). Use to broadcast announcements.", {
+  subject: z.string(),
+  body_html: z.string(),
+  segment: z.enum(["all", "retail", "wholesale", "tier_a", "tier_b", "tier_c"]).default("all"),
+}, async (body) => {
+  await ensureToken();
+  const draft = await api("POST", "/admin/newsletter/draft", body);
+  const result = await api("POST", `/admin/newsletter/${draft.id}/send`);
+  return { content: [{ type: "text", text: `Sent to ${result.sent}/${result.recipients} (${result.errors} errors)` }] };
+});
+
+// ── tax reports ───────────────────────────────────────────────────
+
+server.tool("gstr1_csv_url", "Get GSTR-1 invoice-wise CSV URL for a month. Download from admin panel UI.", {
+  year: z.number().int(),
+  month: z.number().int().min(1).max(12),
+}, async ({ year, month }) => {
+  await ensureToken();
+  const url = `${API_BASE}/admin/tax-reports/gstr1/${year}/${month}`;
+  return { content: [{ type: "text", text: `CSV download: ${url} (requires auth header)` }] };
+});
+
+server.tool("gstr3b_summary", "Get GSTR-3B summary (outward supplies + tax payable) for a month.\n\nReturns: Taxable value, CGST, SGST, IGST, totals. Use for monthly GST filing.", {
+  year: z.number().int(),
+  month: z.number().int().min(1).max(12),
+}, async ({ year, month }) => {
+  await ensureToken();
+  const data = await api("GET", `/admin/tax-reports/gstr3b/${year}/${month}`);
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+// ── AR aging (outstanding receivables) ─────────────────────────────
+
+server.tool("ar_aging", "Accounts receivable aging — customers with outstanding credit grouped by age bucket (0-30, 31-60, 61-90, 90+).\n\nReturns: Per-customer + grand total. Use to prioritize collections.", {}, async () => {
+  await ensureToken();
+  const data = await api("GET", "/admin/ar-aging");
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+// ── abandoned carts ───────────────────────────────────────────────
+
+server.tool("list_abandoned_carts", "List carts idle > 1 hour with items. Use to target recovery campaigns.", {}, async () => {
+  await ensureToken();
+  const data = await api("GET", "/admin/abandoned-carts");
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("nudge_abandoned_cart", "Send abandoned cart reminder (WhatsApp + SMS fallback) to one user.", {
+  user_id: z.string(),
+}, async ({ user_id }) => {
+  await ensureToken();
+  const data = await api("POST", `/admin/abandoned-carts/${user_id}/nudge`);
+  return { content: [{ type: "text", text: JSON.stringify(data) }] };
+});
+
+server.tool("auto_nudge_all_carts", "Bulk-nudge every qualifying abandoned cart (>1h idle, not nudged in last 24h).", {}, async () => {
+  await ensureToken();
+  const data = await api("POST", "/admin/abandoned-carts/auto-nudge");
+  return { content: [{ type: "text", text: `Nudged ${data.nudged} users (${data.errors?.length || 0} errors)` }] };
+});
+
+// ── loyalty (admin view + adjust) ─────────────────────────────────
+
+server.tool("get_customer_loyalty", "View a customer's loyalty balance + history.", {
+  user_id: z.string(),
+}, async ({ user_id }) => {
+  await ensureToken();
+  const data = await api("GET", `/admin/loyalty/${user_id}`);
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("adjust_loyalty_points", "Manually add or remove loyalty points for a customer.\n\nReturns: New balance. Use to credit goodwill points or correct errors.", {
+  user_id: z.string(),
+  points: z.number().int().describe("Positive = credit, negative = debit"),
+  reason: z.string().min(3),
+}, async ({ user_id, points, reason }) => {
+  await ensureToken();
+  const data = await api("POST", `/admin/loyalty/${user_id}/adjust`, { points, reason });
+  return { content: [{ type: "text", text: `${points > 0 ? "+" : ""}${points} pts. New balance: ${data.new_balance}` }] };
+});
+
+// ── reviews moderation ────────────────────────────────────────────
+
+server.tool("list_reviews", "List all product reviews for moderation. Filter by approved state.", {
+  approved: z.boolean().optional(),
+}, async ({ approved }) => {
+  await ensureToken();
+  const q = approved !== undefined ? `?approved=${approved}` : "";
+  const data = await api("GET", `/admin/reviews${q}`);
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+});
+
+server.tool("moderate_review", "Approve/unapprove a review or attach admin reply.", {
+  review_id: z.string(),
+  approved: z.boolean().optional(),
+  admin_reply: z.string().optional(),
+}, async ({ review_id, ...body }) => {
+  await ensureToken();
+  await api("PATCH", `/admin/reviews/${review_id}`, body);
+  return { content: [{ type: "text", text: "Review updated" }] };
+});
+
+server.tool("delete_review", "Delete a review permanently.", {
+  review_id: z.string(),
+}, async ({ review_id }) => {
+  await ensureToken();
+  await api("DELETE", `/admin/reviews/${review_id}`);
+  return { content: [{ type: "text", text: "Review deleted" }] };
+});
+
+// ── e-invoice IRN ─────────────────────────────────────────────────
+
+server.tool("attach_irn_to_invoice", "Attach IRN (Invoice Reference Number) from GSTN IRP after manual registration.", {
+  invoice_id: z.string(),
+  irn: z.string(),
+  ack_no: z.string().optional(),
+  qr_code_url: z.string().optional(),
+  signed_invoice_json: z.string().optional(),
+}, async ({ invoice_id, ...body }) => {
+  await ensureToken();
+  const data = await api("PATCH", `/admin/einvoice/${invoice_id}/irn`, body);
+  return { content: [{ type: "text", text: `IRN attached: ${data.irn}` }] };
+});
+
 // ── start ─────────────────────────────────────────────────────────
 
 log("info", "Server starting", { name: "sre-tea-admin", version: "1.0.0" });
