@@ -17,6 +17,12 @@ function log(level, message, metadata = {}) {
   }
 }
 
+function requireConfirmation(confirmed, action) {
+  if (confirmed !== true) {
+    throw new Error(`Set confirm=true to ${action}.`);
+  }
+}
+
 const API_BASE =
   process.env.SRE_API_URL ||
   "https://jzwp96mgv2.execute-api.ap-south-1.amazonaws.com/prod/api/v1";
@@ -39,20 +45,26 @@ async function api(method, path, body = null, retryOnAuth = true) {
   const opts = {
     method,
     headers: { "Content-Type": "application/json" },
-    redirect: "follow",
+    redirect: "manual",
   };
   if (TOKEN) opts.headers["Authorization"] = `Bearer ${TOKEN}`;
   if (body) opts.body = JSON.stringify(body);
 
   log("debug", "API request", { method, path });
 
-  // Follow 307 redirects with auth headers
   let res = await fetch(`${API_BASE}${path}`, opts);
   if (res.status === 307) {
     const location = res.headers.get("location");
     if (location) {
-      log("debug", "Following redirect", { location });
-      res = await fetch(location, opts);
+      const originalUrl = new URL(`${API_BASE}${path}`);
+      const redirectUrl = new URL(location, originalUrl);
+      if (redirectUrl.origin !== originalUrl.origin) {
+        throw new Error("Refusing to forward admin token to a different origin");
+      }
+      log("debug", "Following same-origin redirect", {
+        location: redirectUrl.toString(),
+      });
+      res = await fetch(redirectUrl.toString(), opts);
     }
   }
 
@@ -681,44 +693,13 @@ server.tool(
   "Deactivate a customer account.\n\nReturns: Confirmation message. Use to archive inactive customers.",
   {
     user_id: z.string().describe("Customer UUID"),
+    confirm: z.literal(true).describe("Required to deactivate the customer"),
   },
-  async ({ user_id }) => {
+  async ({ user_id, confirm }) => {
+    requireConfirmation(confirm, "deactivate this customer");
     await ensureToken();
     const data = await api("DELETE", `/admin/customers/${user_id}`);
     return { content: [{ type: "text", text: data.message }] };
-  },
-);
-
-server.tool(
-  "create_admin_account",
-  "Create a new admin or staff account for the admin panel.\n\nReturns: New account with credentials. Use to onboard team members.",
-  {
-    full_name: z.string(),
-    email: z.string(),
-    phone: z.string(),
-    password: z.string(),
-    role: z
-      .string()
-      .default("admin")
-      .describe("'admin' for full access, 'staff' for limited"),
-  },
-  async ({ full_name, email, phone, password, role }) => {
-    await ensureToken();
-    const data = await api("POST", "/admin/customers/create-admin", {
-      full_name,
-      email,
-      phone,
-      password,
-      role,
-    });
-    return {
-      content: [
-        {
-          type: "text",
-          text: `${data.message}: ${data.email} (ID: ${data.id})`,
-        },
-      ],
-    };
   },
 );
 
@@ -1318,8 +1299,10 @@ server.tool(
   "Remove a tea type from stock tracking.\n\nReturns: Confirmation message. Use to stop tracking discontinued tea types.",
   {
     stock_id: z.string().describe("Tea stock UUID"),
+    confirm: z.literal(true).describe("Required to delete this tea stock record"),
   },
-  async ({ stock_id }) => {
+  async ({ stock_id, confirm }) => {
+    requireConfirmation(confirm, "delete this tea stock record");
     await ensureToken();
     const data = await api("DELETE", `/admin/analytics/tea-stock/${stock_id}`);
     return { content: [{ type: "text", text: data.message }] };
@@ -1389,8 +1372,10 @@ server.tool(
   "Delete a bundle.",
   {
     bundle_id: z.string(),
+    confirm: z.literal(true).describe("Required to delete this bundle"),
   },
-  async ({ bundle_id }) => {
+  async ({ bundle_id, confirm }) => {
+    requireConfirmation(confirm, "delete this bundle");
     await ensureToken();
     await api("DELETE", `/admin/bundles/${bundle_id}`);
     return { content: [{ type: "text", text: "Bundle deleted" }] };
@@ -1458,8 +1443,10 @@ server.tool(
   "Delete a flash sale.",
   {
     sale_id: z.string(),
+    confirm: z.literal(true).describe("Required to delete this flash sale"),
   },
-  async ({ sale_id }) => {
+  async ({ sale_id, confirm }) => {
+    requireConfirmation(confirm, "delete this flash sale");
     await ensureToken();
     await api("DELETE", `/admin/flash-sales/${sale_id}`);
     return { content: [{ type: "text", text: "Flash sale deleted" }] };
@@ -1529,8 +1516,10 @@ server.tool(
   "Delete a batch record.",
   {
     batch_id: z.string(),
+    confirm: z.literal(true).describe("Required to delete this batch"),
   },
-  async ({ batch_id }) => {
+  async ({ batch_id, confirm }) => {
+    requireConfirmation(confirm, "delete this batch");
     await ensureToken();
     await api("DELETE", `/admin/batches/${batch_id}`);
     return { content: [{ type: "text", text: "Batch deleted" }] };
@@ -1640,8 +1629,10 @@ server.tool(
     segment: z
       .enum(["all", "retail", "wholesale", "tier_a", "tier_b", "tier_c"])
       .default("all"),
+    confirm: z.literal(true).describe("Required to send the newsletter"),
   },
-  async (body) => {
+  async ({ confirm, ...body }) => {
+    requireConfirmation(confirm, "send this newsletter");
     await ensureToken();
     const draft = await api("POST", "/admin/newsletter/draft", body);
     const result = await api("POST", `/admin/newsletter/${draft.id}/send`);
@@ -1823,8 +1814,10 @@ server.tool(
   "Delete a review permanently.",
   {
     review_id: z.string(),
+    confirm: z.literal(true).describe("Required to delete this review"),
   },
-  async ({ review_id }) => {
+  async ({ review_id, confirm }) => {
+    requireConfirmation(confirm, "delete this review");
     await ensureToken();
     await api("DELETE", `/admin/reviews/${review_id}`);
     return { content: [{ type: "text", text: "Review deleted" }] };

@@ -170,7 +170,7 @@ const client = createClient(process);
 - **`list_customers`** - Search customers by name, phone, or business name
 - **`get_customer`** - Detailed customer profile and history
 - **`update_customer`** - Modify customer type, credit limit, tier
-- **`delete_customer`** - Deactivate customer account
+- **`delete_customer`** - Deactivate customer account; requires `confirm: true`
 - **`bulk_upload_customers`** - Batch import customers from CSV/JSON
 
 ### Financial Operations
@@ -202,7 +202,7 @@ const client = createClient(process);
 - **`get_tea_stock`** - Raw tea stock levels by type (kg)
 - **`create_tea_stock`** - Add new tea type to tracking
 - **`update_tea_stock`** - Adjust stock (add/reduce/set total kg)
-- **`delete_tea_stock`** - Remove tea type from tracking
+- **`delete_tea_stock`** - Remove tea type from tracking; requires `confirm: true`
 
 ### Reporting & Insights
 
@@ -212,10 +212,6 @@ const client = createClient(process);
 - **`restock_alert`** - Products below low stock threshold
 - **`get_stock_status`** - All products with restock prioritization
 - **`bulk_update_stock`** - Batch stock updates
-
-### Admin Management
-
-- **`create_admin_account`** - Create admin or staff accounts
 
 ## Logging
 
